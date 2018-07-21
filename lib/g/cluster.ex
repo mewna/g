@@ -14,6 +14,7 @@ defmodule G.Cluster do
       ready: false,
       id: opts[:id],
       refs: %{},
+      shard_count: 0,
     }
     Logger.info "[CLUSTER] Started as #{state[:id]}"
     Process.send_after self(), :block_until_master, @master_poll_wait
@@ -24,17 +25,22 @@ defmodule G.Cluster do
     {:reply, state[:id], state}
   end
 
+  def handle_call(:get_shard_count, _from, state) do
+    {:reply, state[:shard_count], state}
+  end
+
   def handle_cast({:create_shard, {shard_id, shard_count}}, state) do
-    state = %{
+    shard_state = %{
       shard_id: shard_id,
       shard_count: shard_count,
       cluster: self(),
+      token: System.get_env("BOT_TOKEN"),
     }
-    {res, pid} = G.Shard.start_link state
+    {res, pid} = G.Shard.start_link shard_state
     if res == :ok do
       ref = Process.monitor pid
       refs = state[:refs] |> Map.put(ref, shard_id)
-      {:noreply, state}
+      {:noreply, %{state | refs: refs, shard_count: state[:shard_count] + 1}}
     else
       Logger.warn "Couldn't start shard #{shard_id}/#{shard_count}!?"
       {:noreply, state}
@@ -47,7 +53,7 @@ defmodule G.Cluster do
   end
 
   def handle_info({:shard_booted, shard_id}, state) do
-    GenServer.call {:via, :swarm, @master_atom}, :shard_booted
+    GenServer.cast {:via, :swarm, @master_atom}, {:shard_booted, shard_id}
     {:noreply, state}
   end
 

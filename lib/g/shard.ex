@@ -63,39 +63,39 @@ defmodule G.Shard do
               |> Map.put(:internal_id, internal_id)
               |> Map.put(:seq, 0)
               |> Map.put(:trace, [])
-      {:ok, state}
+      # TODO: This should actually use WebSockex.start_link/4
+      WebSockex.start @gateway_url, __MODULE__, state, [async: true]
     else
       {:error, "invalid shard count: #{state[:shard_id]} >= #{state[:shard_count]}"}
     end
   end
 
   def init(state) do
-    Logger.info "[SHARD] init?"
+    state |> info("init?")
     {:ok, state}
   end
 
   def handle_connect(conn, state) do
-    Logger.info "[DISCORD] Connected to gateway"
+    state |> info("Connected to gateway")
     unless is_nil state[:session_id] do
-      Logger.info "[DISCORD] We have a session; expect OP 10 -> OP 6."
+      state |> info("We have a session; expect OP 10 -> OP 6.")
     end
     headers = Enum.into conn.resp_headers, %{}
     ray = headers["Cf-Ray"]
     server = headers[:Server]
-    Logger.info "[DISCORD] Connected to #{server} ray #{ray}"
+    state |> info("Connected to #{server} ray #{ray}")
     new_state = state
                 |> Map.put(:client_pid, self())
                 |> Map.put(:cf_ray, ray)
                 |> Map.put(:trace, nil)
     # We connected to the gateway successfully, we're logging in now
-    send state[:parent], {:shard_status, :logging_in}
     {:ok, new_state}
   end
 
   def handle_frame({:binary, msg}, state) do
     payload = :erlang.binary_to_term(msg)
     # When we get a gateway op, it'll be of the same form always, which makes our lives easier
-    state |> info("Got gateway message: #{inspect payload, pretty: true}")
+    #state |> info("Got gateway payload: #{inspect payload, pretty: true}")
     state = state |> Map.put(:seq, payload[:s] || state[:seq])
     {res, reply, new_state} = handle_op payload[:op], payload, state
     case res do
@@ -107,22 +107,22 @@ defmodule G.Shard do
   end
 
   def handle_frame(msg, state) do
-    Logger.info "[DISCORD] Got gateway payload: #{inspect msg}"
+    state |> info("Got non-ETF gateway payload: #{inspect msg, pretty: true}")
     {:ok, state}
   end
 
   def handle_disconnect(disconnect_map, state) do
-    state |> warn("[DISCORD] Disconnected from websocket!")
+    state |> warn("Disconnected from websocket!")
     unless is_nil disconnect_map[:reason] do
-      state |> warn("[DISCORD] Disconnect reason: #{inspect disconnect_map[:reason]}")
+      state |> warn("Disconnect reason: #{inspect disconnect_map[:reason]}")
     end
-    state |> warn("[DISCORD] Done! Please start a new gateway link.")
+    state |> warn("Done! Please start a new gateway link.")
     # Disconnected from gateway, so not much else to say here
     {:ok, state}
   end
 
-  def terminate(reason, _state) do
-    Logger.info "[DISCORD] Websocket terminating: #{inspect reason}"
+  def terminate(reason, state) do
+    state |> info("Websocket terminating: #{inspect reason}")
     :ok
   end
 
@@ -135,12 +135,43 @@ defmodule G.Shard do
     state |> info("Hello!")
     # Start HEARTBEAT once we get HELLO
     send self(), {:heartbeat, d[:heartbeat_interval]}
-    state |> info("Trace: #{inspect d[:trace], pretty: true}")
-    # Alert the cluster that we finished booting, backing off a bit to allow
-    # for proper IDENTIFY ratelimit handling
-    Process.send_after state[:cluster], :shard_booted, 5500
+    trace = d[:_trace]
+    state |> info("Trace: #{inspect trace, pretty: true}")
     # Finally, fire off an IDENTIFY
-    {:reply, identify(state), %{state | trace: d[:trace]}}
+    {:reply, identify(state), %{state | trace: trace}}
+  end
+
+  defp handle_op(@op_dispatch, payload, state) do
+    d = payload[:d]
+    t = payload[:t]
+    case t do
+      :READY ->
+        state |> info("READY! Welcome to Discord!")
+        # Extract info about ourself
+        user = d[:user]
+        guilds = d[:guilds]
+        v = d[:v]
+        state |> info("Logged in to gateway v#{v}, #{length guilds} guilds")
+        state |> info("We are: '#{user[:username]}##{user[:discriminator]}'")
+        # Alert the cluster that we finished booting, backing off a bit to allow
+        # for proper IDENTIFY ratelimit handling
+        # TODO: Figure out how to test RESUME vs IDENTIFY
+        Process.send_after state[:cluster], {:shard_booted, state[:shard_id]}, 5500
+      _ ->
+        state |> warn("Unknown DISPATCH type: #{inspect t, pretty: true}")
+    end
+    {:noreply, nil, state}
+  end
+
+  defp handle_op(@op_heartbeat_ack, _payload, state) do
+    state |> info("HEARTBEAT_ACK")
+    {:noreply, nil, state}
+  end
+
+  defp handle_op(@op_invalid_session, payload, state) do
+    can_resume = payload[:d]
+    state |> info("INVALID SESSION: can resume = #{inspect can_resume}")
+    {:terminate, nil, state}
   end
 
   #######################
@@ -148,10 +179,11 @@ defmodule G.Shard do
   #######################
 
   def handle_info({:heartbeat, interval} = message, state) do
+    state |> info("HEARTBEAT")
     payload = binary_payload @op_heartbeat, state[:seq]
-    WebSockex.send_frame self(), {:binary, payload}
     Process.send_after self(), message, interval
-    {:ok, state}
+    #{:ok, state}
+    {:reply, {:binary, payload}, state}
   end
 
   #####################
@@ -159,7 +191,7 @@ defmodule G.Shard do
   #####################
 
   defp identify(state) do
-    state |> info("[DISCORD] Identifying as [#{inspect state[:shard_id]}, #{inspect state[:shard_count]}]...")
+    state |> info("Identifying as [#{inspect state[:shard_id]}, #{inspect state[:shard_count]}]...")
     data = %{
       "token" => state[:token],
       "properties" => %{
@@ -172,13 +204,12 @@ defmodule G.Shard do
       "shard" => [state[:shard_id], state[:shard_count]],
     }
     payload = binary_payload @op_identify, data
-    Logger.info "[DISCORD] Done!"
     {:binary, payload}
   end
 
   defp resume(state) do
     seq = GenServer.call state[:parent], :seq
-    state |> info("[DISCORD] Resuming from seq #{inspect seq}")
+    state |> info("Resuming from seq #{inspect seq}")
     payload = binary_payload @op_resume, %{
       "session_id" => state[:session_id],
       "token" => state[:token],
