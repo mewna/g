@@ -1,6 +1,6 @@
 # G
 
-**Distributed, cacheless Discord bot sharding.
+Distributed, cacheless Discord bot sharding.
 
 ## Wait what?
 
