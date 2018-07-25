@@ -1,0 +1,11 @@
+{application,g,
+             [{applications,[kernel,stdlib,elixir,logger,lace,httpoison,swarm,
+                             websockex]},
+              {description,"g"},
+              {modules,['Elixir.G','Elixir.G.Application','Elixir.G.Cluster',
+                        'Elixir.G.Master','Elixir.G.Shard',
+                        'Elixir.G.Supervisor']},
+              {registered,[]},
+              {vsn,"0.1.0"},
+              {extra_applications,[logger]},
+              {mod,{'Elixir.G.Application',[]}}]}.

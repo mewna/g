@@ -15,7 +15,7 @@ defmodule G.Master do
     state = %{
       id: id,
       last_shard_connect: -1,
-      unused_shards: [0],
+      unused_shards: Enum.to_list(0..3),
       used_shards: [],
     }
     Process.send_after self(), :up, 1000
@@ -24,16 +24,7 @@ defmodule G.Master do
 
   def handle_info(:up, state) do
     Logger.info "[MASTER] Master node up!"
-    Process.send_after self(), :get_clusters, 5000
-    #Logger.info "Token: #{state[:token]}"
-    #Logger.info "I am: #{inspect self(), pretty: true}"
-    #Logger.info "Registered pids:"
-    #members = Swarm.members(:g)
-    #Swarm.registered()
-    #|> Enum.filter(fn {_, pid} -> Enum.member?(members, pid) end)
-    #|> Enum.each(fn {name, pid} -> Logger.info "- #{inspect name, pretty: true} -> #{inspect pid, pretty: true}" end)
-    #fake = Swarm.whereis_name(:asdf)
-    #Logger.info "This won't exist: #{inspect fake, pretty: true}"
+    Process.send_after self(), :get_clusters, 1000
     {:noreply, state}
   end
 
@@ -81,7 +72,6 @@ defmodule G.Master do
                                     |> hd
       target_id = GenServer.call({:via, :swarm, name}, :get_id)
       Logger.info "[MASTER] Target cluster: #{target_id} (pid #{inspect target, pretty: true} @ #{inspect name, pretty: true}), #{shard_count} shards"
-      # TODO: Proper shard ID assignment
       GenServer.cast {:via, :swarm, name}, {:create_shard, {next_id, length(state[:used_shards]) + length(state[:unused_shards])}}
       {:noreply, state}
     else
@@ -97,10 +87,17 @@ defmodule G.Master do
     Process.send_after self(), :start_sharding, 500
     {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
   end
+
+  def handle_cast({:shard_down, shard_id}, state) do
+    Logger.info "[MASTER] Shard #{shard_id} down, queueing reconnect"
+    used_shards = state[:used_shards] |> List.delete(shard_id)
+    unused_shards = state[:unused_shards] ++ [shard_id]
+    {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
+  end
+
   def handle_call(:get_master_id, _from, state) do
     {:reply, state[:id], state}
   end
-
 
   def handle_call({:swarm, :begin_handoff}, _from, state) do
     {:reply, {:resume, state}, state}

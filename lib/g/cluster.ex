@@ -42,13 +42,16 @@ defmodule G.Cluster do
       refs = state[:refs] |> Map.put(ref, shard_id)
       {:noreply, %{state | refs: refs, shard_count: state[:shard_count] + 1}}
     else
-      Logger.warn "Couldn't start shard #{shard_id}/#{shard_count}!?"
+      Logger.warn "[CLUSTER] Couldn't start shard #{shard_id}/#{shard_count}!?"
       {:noreply, state}
     end
   end
 
-  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     # TODO: Alert master that shard went rip
+    shard_id = state[:refs][ref]
+    Logger.warn "[CLUSTER] Shard #{shard_id} down: #{inspect reason, pretty: true}"
+    GenServer.cast {:via, :swarm, @master_atom}, {:shard_down, shard_id}
     {:noreply, state}
   end
 
