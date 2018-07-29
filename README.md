@@ -28,6 +28,11 @@ Session-stealing is a useful trick to help minimize bot downtime. Rather than ha
 flow, you can "steal" the session from a previous shard with the same id / shard total, and resume the session on a new shard 
 (potentially even on a different node!) so that you can continue your shard's session without any downtime. 
 
+## Node IDs
+
+g uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs for many things. Eventually this may be a proper
+"pluggable" thing. 
+
 ## Usage
 
 Set these environment variables for each node, and run with `mix run --no-halt`. 
@@ -43,3 +48,11 @@ NODE_NAME="my-awesome-node"
 GROUP_NAME="my-awesome-group"
 NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjudeshcybgrvejwhuysdcbva"
 ```
+
+## TODO
+
+- Proper session stealing
+- Proper backend event queueing
+- Shard handoff over nodes probably doesn't work right
+- Some sort of standard for external cache workers
+- Persist session / seqnum in redis
