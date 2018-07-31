@@ -30,7 +30,7 @@ flow, you can "steal" the session from a previous shard with the same id / shard
 
 ## Node IDs
 
-g uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs for many things. Eventually this may be a proper
+G uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs for many things. Eventually this may be a proper
 "pluggable" thing. 
 
 ## Usage

@@ -10,12 +10,36 @@ defmodule G.Application do
   def start(_type, _args) do
     # List all child processes to be supervised
     children = [
-      # Starts a worker by calling: G.Worker.start_link(arg)
-      # {G.Worker, arg},
+      # Clustering
       {Lace.Redis, %{redis_ip: System.get_env("REDIS_HOST"), redis_port: 6379, pool_size: 10, redis_pass: System.get_env("REDIS_PASS")}},
       {Lace, %{name: System.get_env("NODE_NAME"), group: System.get_env("GROUP_NAME"), cookie: System.get_env("NODE_COOKIE")}},
-      #{G.Cluster, %{token: System.get_env("BOT_TOKEN")}},
+      # Dynamic processes
       {G.Supervisor, []},
+      # Message queueing
+      %{
+        id: :q_cache,
+        start: {Q, :start_link, [%{
+          name: :q_cache,
+          queue: "discord:queue:cache",
+          host: System.get_env("REDIS_HOST"),
+          port: 6379,
+          pass: System.get_env("REDIS_PASS"),
+          event_handler: &MyModule.handle/1,
+          poll: false,
+        }]}
+      },
+      %{
+        id: :q_backend,
+        start: {Q, :start_link, [%{
+          name: :q_backend,
+          queue: "discord:queue:backend",
+          host: System.get_env("REDIS_HOST"),
+          port: 6379,
+          pass: System.get_env("REDIS_PASS"),
+          event_handler: &MyModule.handle/1,
+          poll: false,
+        }]}
+      },
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

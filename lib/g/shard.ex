@@ -158,6 +158,7 @@ defmodule G.Shard do
         # TODO: Figure out how to test RESUME vs IDENTIFY
         Process.send_after state[:cluster], {:shard_booted, state[:shard_id]}, 5500
       _ ->
+        GenServer.cast :q_backend, {:queue, payload}
         state |> warn("Unknown DISPATCH type: #{inspect t, pretty: true}")
     end
     {:noreply, nil, state}
