@@ -56,3 +56,4 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 - Shard handoff over nodes probably doesn't work right
 - Some sort of standard for external cache workers
 - Persist session / seqnum in redis
+- Option for member chunking

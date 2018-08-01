@@ -70,14 +70,26 @@ defmodule G.Master do
                                         shard_count_1 < shard_count_2
                                       end)
                                     |> hd
+      # Once we have a target cluster, we can ask it to spawn a shard
       target_id = GenServer.call({:via, :swarm, name}, :get_id)
       Logger.info "[MASTER] Target cluster: #{target_id} (pid #{inspect target, pretty: true} @ #{inspect name, pretty: true}), #{shard_count} shards"
       GenServer.cast {:via, :swarm, name}, {:create_shard, {next_id, length(state[:used_shards]) + length(state[:unused_shards])}}
       {:noreply, state}
     else
       Logger.info "[MASTER] Finished booting shards!"
+      # Once we finish booting shards, we can start processing unused IDs.
+      send self(), :check_reconnect_queue
       {:noreply, state}
     end
+  end
+
+  def handle_info(:check_reconnect_queue, state) do
+    if length(state[:unused_shards]) > 0 do
+      send self(), :start_sharding
+    else
+      Process.send_after self(), :check_reconnect_queue, 5000
+    end
+    {:noreply, state}
   end
 
   def handle_cast({:shard_booted, shard_id}, state) do
@@ -89,15 +101,19 @@ defmodule G.Master do
   end
 
   def handle_cast({:shard_down, shard_id}, state) do
-    Logger.info "[MASTER] Shard #{shard_id} down, queueing reconnect"
-    used_shards = state[:used_shards] |> List.delete(shard_id)
-    unused_shards = state[:unused_shards] ++ [shard_id]
+    Logger.warn "[MASTER] Shard #{shard_id} down, queueing reconnect"
+    used_shards = state[:used_shards] |> List.delete(shard_id) |> Enum.uniq
+    unused_shards = (state[:unused_shards] ++ [shard_id]) |> Enum.uniq
     {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
   end
 
   def handle_call(:get_master_id, _from, state) do
     {:reply, state[:id], state}
   end
+
+  #####################
+  ## Swarm callbacks ##
+  #####################
 
   def handle_call({:swarm, :begin_handoff}, _from, state) do
     {:reply, {:resume, state}, state}

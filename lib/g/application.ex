@@ -8,6 +8,7 @@ defmodule G.Application do
   use Application
   require Logger
   def start(_type, _args) do
+    G.Signal.swap_handlers()
     # List all child processes to be supervised
     children = [
       # Clustering
