@@ -51,13 +51,13 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 
 ## TODO
 
-- Proper session stealing
-- Shard handoff over nodes probably doesn't work right
 - Some sort of standard for external cache workers
-- Persist session / seqnum in redis
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
+- Zombie shard detection
 
 ## Done
 
 - Proper backend event queueing
+- Persist session / seqnum in redis
+- Proper session stealing

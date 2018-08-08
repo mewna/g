@@ -141,8 +141,24 @@ defmodule G.Shard do
     send self(), {:heartbeat, d[:heartbeat_interval]}
     trace = d[:_trace]
     state |> info("Trace: #{inspect trace, pretty: true}")
-    # Finally, fire off an IDENTIFY
-    {:reply, identify(state), %{state | trace: trace}}
+    # Finally, fire off an IDENTIFY or a RESUME based on the session state
+    {:ok, session_id} = Redis.q ["HGET", @session_key_base, "#{state[:shard_id}"]]
+    if session_id == nil or session_id == :undefined do
+      # We don't have a session, IDENTIFY
+      {:reply, identify(state), %{state | trace: trace}}
+    else
+      # We do have a session, fetch seqnum and RESUME
+      {:ok, seqnum} = Redis.q ["HGET", @seq_key_base, "#{state[:shard_id]}"]
+      if seqnum == nil or seqnum == :undefined do
+        # In some cases, it's possible that we have a session but not a seqnum
+        # If this happens, we just bail out and IDENTIFY
+        {:reply, identify(state), %{state | trace: trace}}
+      else
+        # We're probably good, we can RESUME now
+        seqnum = seqnum |> String.to_integer
+        {:reply, resume(state, session_id, seqnum), %{state | trace: trace}}
+      end
+    end
   end
 
   defp handle_op(@op_dispatch, payload, state) do
@@ -207,6 +223,11 @@ defmodule G.Shard do
   defp handle_op(@op_invalid_session, payload, state) do
     can_resume = payload[:d]
     state |> info("INVALID SESSION: can resume = #{inspect can_resume}")
+    unless can_resume do
+      # We can't resume the session, delete it so that next run gets a full IDENTIFY flow
+      Redis.q ["HDEL", @session_key_base, "#{state[:shard_id]}"]
+      Redis.q ["HDEL", @seq_key_base, "#{state[:shard_id]}"]
+    end
     {:terminate, nil, state}
   end
 
@@ -243,11 +264,10 @@ defmodule G.Shard do
     {:binary, payload}
   end
 
-  defp resume(state) do
-    seq = GenServer.call state[:parent], :seq
+  defp resume(state, session_id, seq) do
     state |> info("Resuming from seq #{inspect seq}")
     payload = binary_payload @op_resume, %{
-      "session_id" => state[:session_id],
+      "session_id" => session_id,
       "token" => state[:token],
       "seq" => seq,
       "properties" => %{
