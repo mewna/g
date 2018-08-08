@@ -79,6 +79,10 @@ defmodule G.Cluster do
     GenServer.cast {:via, :swarm, @master_atom}, {:shard_booted, shard_id}
     {:noreply, state}
   end
+  def handle_info({:shard_resumed, shard_id}, state) do
+    GenServer.cast {:via, :swarm, @master_atom}, {:shard_resumed, shard_id}
+    {:noreply, state}
+  end
 
   def handle_info(:block_until_master, state) do
     unless Swarm.whereis_name(@master_atom) == :undefined do

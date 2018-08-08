@@ -85,6 +85,7 @@ defmodule G.Master do
 
   def handle_info(:check_reconnect_queue, state) do
     if length(state[:unused_shards]) > 0 do
+      Logger.info "[MASTER] Reconnecting shards: #{inspect state[:unused_shards], pretty: true}"
       send self(), :start_sharding
     else
       Process.send_after self(), :check_reconnect_queue, 5000
@@ -97,6 +98,13 @@ defmodule G.Master do
     unused_shards = state[:unused_shards] |> List.delete(shard_id)
     used_shards = state[:used_shards] ++ [shard_id]
     Process.send_after self(), :start_sharding, 500
+    {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
+  end
+  def handle_cast({:shard_resumed, shard_id}, state) do
+    Logger.info "[MASTER] Resumed shard #{shard_id}"
+    unused_shards = state[:unused_shards] |> List.delete(shard_id)
+    used_shards = state[:used_shards] ++ [shard_id]
+    send self(), :start_sharding
     {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
   end
 

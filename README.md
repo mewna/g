@@ -52,7 +52,7 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 ## TODO
 
 - Proper session stealing
-- Proper backend event queueing
+- Proper backend event queueing :check:
 - Shard handoff over nodes probably doesn't work right
 - Some sort of standard for external cache workers
 - Persist session / seqnum in redis
