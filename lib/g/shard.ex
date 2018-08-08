@@ -1,11 +1,15 @@
 defmodule G.Shard do
   use WebSockex
   require Logger
+  alias Lace.Redis
 
   @api_base "https://discordapp.com/api/v6"
 
   @large_threshold 250
   @gateway_url "wss://gateway.discord.gg/?v=6&encoding=etf"
+
+  @session_key_base "g:shard:session"
+  @seq_key_base "g:shard:seqnum"
 
   ##################
   ## Opcode stuff ##
@@ -147,6 +151,30 @@ defmodule G.Shard do
     case t do
       :READY ->
         state |> info("READY! Welcome to Discord!")
+        # %{
+        #   _trace: ["gateway-prd-main-numbers", "discord-sessions-prd-numbers-numbers"],
+        #   guilds: [%{id: 2837641927843141, unavailable: true}],
+        #   presences: [],
+        #   private_channels: [],
+        #   relationships: [],
+        #   session_id: "memes",
+        #   shard: [0, 1234567890],
+        #   user: %{
+        #     avatar: "alsiekduhyfnjs",
+        #     bot: true,
+        #     discriminator: "123456",
+        #     email: nil,
+        #     id: 2186743214213074,
+        #     mfa_enabled: true,
+        #     username: "memebot 9000",
+        #     verified: true
+        #   },
+        #   user_settings: %{},
+        #   v: 6
+        # }
+
+        # Update session and seqnum
+        Redis.q ["HSET", @session_key_base, "#{state[:shard_id]}", d[:session_id]]
         # Extract info about ourself
         user = d[:user]
         guilds = d[:guilds]
@@ -164,6 +192,10 @@ defmodule G.Shard do
         GenServer.cast :q_backend, {:queue, payload}
         state |> warn("Unknown DISPATCH type: #{inspect t, pretty: true}")
     end
+    # Finally, whenever we get a DISPATCH event, we need to update the seqnum
+    # based on what the gateway tells us
+    # TODO: Check against old seqnum to make sure the gateway isn't telling us to go time-traveling
+    Redis.q ["HSET", @seq_key_base, "#{state[:shard_id]}", payload[:s]]
     {:noreply, nil, state}
   end
 
