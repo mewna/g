@@ -73,7 +73,6 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 - Some sort of standard for external cache workers
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
-- Rebalance shards
 - Protect against the case of a 0-shard node
 
 ## Done
@@ -82,3 +81,4 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 - Persist session / seqnum in redis
 - Proper session stealing
 - Zombie shard detection
+- Rebalance shards
