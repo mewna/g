@@ -18,18 +18,6 @@ defmodule G.Application do
       {G.Supervisor, []},
       # Message queueing
       %{
-        id: :q_cache,
-        start: {Q, :start_link, [%{
-          name: :q_cache,
-          queue: "discord:queue:cache",
-          host: System.get_env("REDIS_HOST"),
-          port: 6379,
-          pass: System.get_env("REDIS_PASS"),
-          event_handler: &MyModule.handle/1,
-          poll: false,
-        }]}
-      },
-      %{
         id: :q_backend,
         start: {Q, :start_link, [%{
           name: :q_backend,
@@ -37,7 +25,7 @@ defmodule G.Application do
           host: System.get_env("REDIS_HOST"),
           port: 6379,
           pass: System.get_env("REDIS_PASS"),
-          event_handler: &MyModule.handle/1,
+          event_handler: nil, # &MyModule.handle/1,
           poll: false,
         }]}
       },

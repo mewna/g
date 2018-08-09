@@ -67,12 +67,26 @@ defmodule G.Cluster do
     end
   end
 
+  def handle_cast({:stop_shards, count}, state) do
+    # Just take however many shards off the top and stop them
+    state[:pids]
+      |> Map.keys
+      |> Enum.take(count)
+      |> Enum.each(fn(id) ->
+          # Tell each shard to close its connection
+          send state[:pids][id], :close_connection
+        end)
+    {:noreply, state}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     # Alert master that shard went rip
     shard_id = state[:refs][ref]
+    {_, refs} = state[:refs] |> Map.pop(ref)
+    {_, pids} = state[:pids] |> Map.pop(shard_id)
     Logger.warn "[CLUSTER] Shard #{shard_id} down: #{inspect reason, pretty: true}"
     GenServer.cast {:via, :swarm, @master_atom}, {:shard_down, shard_id}
-    {:noreply, state}
+    {:noreply, %{state | shard_count: state[:shard_count] - 1, refs: refs, pids: pids}}
   end
 
   def handle_info({:shard_booted, shard_id}, state) do

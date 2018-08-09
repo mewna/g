@@ -58,6 +58,9 @@ defmodule G.Shard do
   defp warn(state, message) do
     Logger.warn "[SHARD #{state[:shard_id]}/#{state[:shard_count]}] #{message}"
   end
+  defp debug(state, message) do
+    Logger.debug "[SHARD #{state[:shard_id]}/#{state[:shard_count]}] #{message}"
+  end
 
   ###############
   ## WEBSOCKET ##
@@ -121,7 +124,7 @@ defmodule G.Shard do
     {:ok, state}
   end
 
-  def handle_cast(:close, state) do
+  def handle_info(:close_connection, state) do
     state |> warn("Disconnecting due to request")
     {:close, state}
   end
@@ -155,7 +158,7 @@ defmodule G.Shard do
     # Since we've successfully connected, we can start zombie shard detection
     send self(), :check_zombie
     # Finally, fire off an IDENTIFY or a RESUME based on the session state
-    {:ok, session_id} = Redis.q ["HGET", @session_key_base, "#{state[:shard_id}"]]
+    {:ok, session_id} = Redis.q ["HGET", @session_key_base, "#{state[:shard_id]}"]
     if session_id == nil or session_id == :undefined do
       # We don't have a session, IDENTIFY
       {:reply, identify(state), %{state | trace: trace}}
@@ -228,7 +231,7 @@ defmodule G.Shard do
   end
 
   defp handle_op(@op_heartbeat_ack, _payload, state) do
-    state |> info("HEARTBEAT_ACK")
+    state |> debug("HEARTBEAT_ACK")
     {:noreply, nil, state}
   end
 
@@ -248,7 +251,7 @@ defmodule G.Shard do
   #######################
 
   def handle_info({:heartbeat, interval} = message, state) do
-    state |> info("HEARTBEAT")
+    state |> debug("HEARTBEAT")
     payload = binary_payload @op_heartbeat, state[:seq]
     Process.send_after self(), message, interval
     {:reply, {:binary, payload}, state}
@@ -259,6 +262,7 @@ defmodule G.Shard do
     now = :os.system_time :millisecond
     if now - last >= @zombie_threshold do
       # Zombie! Terminate and let the shard get rescheduled
+      state |> warn("Connection went zombie, rescheduling shard...")
       {:close, state}
     else
       # Check once a second is probably reasonable

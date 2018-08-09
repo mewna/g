@@ -4,6 +4,14 @@ defmodule G.Master do
 
   @master_atom :g_master
 
+  # Assuming we have M expected shards and N clusters, a balanced group would
+  # have exactly (M / N) shards / cluster. Obviously this isn't possible for a
+  # lot of reasons (ex. 50 shards but 4 clusters expectes 12.5 shards per
+  # cluster), so we give it a "threshold" - if all cluster are within
+  # @balance_threshold of the perfect (M / N) count, the group is considered
+  # balanaced.
+  @balance_threshold 1
+
   def start_link(opts) do
     GenServer.start_link __MODULE__, opts
   end
@@ -15,7 +23,7 @@ defmodule G.Master do
     state = %{
       id: id,
       last_shard_connect: -1,
-      unused_shards: Enum.to_list(0..3),
+      unused_shards: Enum.to_list(0..7),
       used_shards: [],
     }
     Process.send_after self(), :up, 1000
@@ -37,39 +45,42 @@ defmodule G.Master do
     {:noreply, state}
   end
 
+  # Get clusters sorted by shard count. Clusters are sorted ascending, ie the
+  # head of the list is smallest and the tail is the largest
+  defp get_clusters_by_shard_count do
+    # [{name, pid}]
+    clusters = Swarm.registered()
+    # This:
+    # - Gets all pids in the swarm that are shard clusters
+    # - Queries them for shard count
+    # - Sorts them by shard count, ascending
+    # - Picks the head of the list (ie. the cluster with the fewest shards on it)
+    clusters
+    |> Enum.filter(fn {cluster_module_name, _pid} ->
+        cl_name = case cluster_module_name do
+                    {_module, atom} ->
+                      Atom.to_string atom
+                    atom when is_atom(atom) ->
+                      Atom.to_string atom
+                    _ ->
+                      raise ""
+                  end
+        String.starts_with? cl_name, "g_cluster"
+      end)
+    |> Enum.map(fn {name, cluster} ->
+        shard_count = GenServer.call({:via, :swarm, name}, :get_shard_count)
+        {shard_count, cluster, name}
+      end)
+    |> Enum.sort(fn {shard_count_1, _, _}, {shard_count_2, _, _} ->
+        shard_count_1 < shard_count_2
+      end)
+  end
+
   def handle_info(:start_sharding, state) do
     unless length(state[:unused_shards]) == 0 do
       next_id = hd state[:unused_shards]
-      # Get all clusters
-      #clusters = Swarm.members :g_cluster
-      # [{name, pid}]
-      clusters = Swarm.registered()
 
-      # This:
-      # - Gets all pids in the swarm that are shard clusters
-      # - Queries them for shard count
-      # - Sorts them by shard count, ascending
-      # - Picks the head of the list (ie. the cluster with the fewest shards on it)
-      {shard_count, target, name} = clusters
-                                    |> Enum.filter(fn {cluster_module_name, _pid} ->
-                                        cl_name = case cluster_module_name do
-                                                    {_module, atom} ->
-                                                      Atom.to_string atom
-                                                    atom when is_atom(atom) ->
-                                                      Atom.to_string atom
-                                                    _ ->
-                                                      raise ""
-                                                  end
-                                        String.starts_with? cl_name, "g_cluster"
-                                      end)
-                                    |> Enum.map(fn {name, cluster} ->
-                                        shard_count = GenServer.call({:via, :swarm, name}, :get_shard_count)
-                                        {shard_count, cluster, name}
-                                      end)
-                                    |> Enum.sort(fn {shard_count_1, _, _}, {shard_count_2, _, _} ->
-                                        shard_count_1 < shard_count_2
-                                      end)
-                                    |> hd
+      {shard_count, target, name} = get_clusters_by_shard_count() |> hd
       # Once we have a target cluster, we can ask it to spawn a shard
       target_id = GenServer.call({:via, :swarm, name}, :get_id)
       Logger.info "[MASTER] Target cluster: #{target_id} (pid #{inspect target, pretty: true} @ #{inspect name, pretty: true}), #{shard_count} shards"
@@ -79,6 +90,7 @@ defmodule G.Master do
       Logger.info "[MASTER] Finished booting shards!"
       # Once we finish booting shards, we can start processing unused IDs.
       send self(), :check_reconnect_queue
+      send self(), :check_rebalance
       {:noreply, state}
     end
   end
@@ -91,6 +103,51 @@ defmodule G.Master do
       Process.send_after self(), :check_reconnect_queue, 5000
     end
     {:noreply, state}
+  end
+
+  def handle_info(:check_rebalance, state) do
+    # {shard_count, target, name}
+    sorted_clusters = get_clusters_by_shard_count()
+                      |> Enum.sort(fn {shard_count_1, _, _}, {shard_count_2, _, _} ->
+                        shard_count_1 < shard_count_2
+                      end)
+    shard_count = length(state[:used_shards]) + length(state[:unused_shards])
+    expected_count = round(shard_count / length(sorted_clusters))
+    Logger.debug "[MASTER] #{length(sorted_clusters)} clusters, #{shard_count} shards, #{expected_count} expected"
+
+    reduce =
+      sorted_clusters
+      |> Enum.filter(fn({shards, _target, _name}) ->
+          above_threshold shards, expected_count
+        end)
+
+    if length(reduce) > 0 do
+      # We have clusters that need to reduce
+      reduce
+      |> Enum.each(fn({shards, _target, name}) ->
+        target_id = GenServer.call {:via, :swarm, name}, :get_id
+        reduction = reduce_to_threshold shards, expected_count
+        if reduction > 0 do
+          # We're above the threshold, tell it to kill shards to bring it back down
+          Logger.warn "[MASTER] Asking cluster #{target_id} to stop #{reduction} shards to bring itself under threshold."
+          GenServer.cast {:via, :swarm, name}, {:stop_shards, reduction}
+        end
+      end)
+    else
+      # Recheck later
+      Process.send_after self(), :check_rebalance, 1000
+    end
+
+    {:noreply, state}
+  end
+  defp within_threshold(count, expected) when is_integer(count) and is_integer(expected) do
+    count >= expected - @balance_threshold and count <= expected + @balance_threshold
+  end
+  defp above_threshold(count, expected) when is_integer(count) and is_integer(expected) do
+    count >= expected + @balance_threshold
+  end
+  defp reduce_to_threshold(count, expected) when is_integer(count) and is_integer(expected) do
+    count - (expected + @balance_threshold)
   end
 
   def handle_cast({:shard_booted, shard_id}, state) do

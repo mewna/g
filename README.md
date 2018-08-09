@@ -28,6 +28,15 @@ Session-stealing is a useful trick to help minimize bot downtime. Rather than ha
 flow, you can "steal" the session from a previous shard with the same id / shard total, and resume the session on a new shard 
 (potentially even on a different node!) so that you can continue your shard's session without any downtime. 
 
+## Shard rebalancing
+
+Suppose you have `M` nodes, and a target shard count `N`. In an ideal world, each node would have exactly `N / M` shards on it. 
+However, this isn't always possible. Suppose a case of `M = 4` and `N = 50`; the ideal case is each node having exactly 12.5
+shards on it, which is impossible for obvious reasons. To solve this, we set a **threshold** of shards / node, so that the 
+cluster will be *approximately* balanced. Specifically, the master will try to balance shards across the cluster such that 
+each node will have `round(M / N) ± 1` shards on it. 
+**This will only work if you have a shard count and a node count that actually fit within these numbers.**
+
 ## Node IDs
 
 G uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs for many things. Eventually this may be a proper
@@ -36,6 +45,12 @@ G uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs 
 ## What about voice support?
 
 Voice support is a non-goal for G. Feel free to PR your own implementation, but I won't be making one. 
+
+## What the heck is with the lack of unit/integration/... tests?
+
+- There is no mock for the Discord API.
+- Distributed stuff turns out to be really hard to test.
+- The lack of a Discord API mock makes it basically impossible to test a lot of this.
 
 ## Usage
 
@@ -58,11 +73,12 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 - Some sort of standard for external cache workers
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
-- Zombie shard detection
 - Rebalance shards
+- Protect against the case of a 0-shard node
 
 ## Done
 
 - Proper backend event queueing
 - Persist session / seqnum in redis
 - Proper session stealing
+- Zombie shard detection
