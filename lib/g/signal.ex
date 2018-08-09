@@ -24,17 +24,17 @@ defmodule G.Signal do
   end
 
   def init(args) do
-    Logger.info("Starting signal handler...")
+    Logger.info("[SIGNAL] Starting signal handler...")
     {:ok, args}
   end
 
   def handle_call(req, state) do
-    Logger.warn("Unhandled call: #{inspect(req, pretty: true)}")
+    Logger.warn("[SIGNAL] Unhandled call: #{inspect(req, pretty: true)}")
     {:ok, :ok, state}
   end
 
   def handle_event(:sigterm, state) do
-    Logger.warn("Got SIGTERM")
+    Logger.warn("[SIGNAL] Got SIGTERM")
     # Once we get SIGTERM, tell the cluster to stop all shards, then exit.
     GenServer.call G.Cluster, :stop_all_shards
     :init.stop()
@@ -42,15 +42,15 @@ defmodule G.Signal do
   end
 
   def handle_event(event, state) do
-    Logger.warn("Unhandled event: #{inspect(event, pretty: true)}")
+    Logger.warn("[SIGNAL] Unhandled event: #{inspect(event, pretty: true)}")
     {:ok, state}
   end
 
   def handle_info(msg, _state) do
-    Logger.warn("Unhandled :info: #{inspect(msg, pretty: true)}")
+    Logger.warn("[SIGNAL] Unhandled :info: #{inspect(msg, pretty: true)}")
   end
 
   def terminate(_, _) do
-    Logger.warn("Signal handler terminating!")
+    Logger.warn("[SIGNAL] Signal handler terminating!")
   end
 end

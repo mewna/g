@@ -32,17 +32,21 @@ defmodule G.Master do
 
   def handle_info(:up, state) do
     Logger.info "[MASTER] Master node up!"
+    Logger.info "[MASTER] Current state: #{inspect state, pretty: true}"
     Process.send_after self(), :get_clusters, 1000
     {:noreply, state}
   end
 
   def handle_info(:get_clusters, state) do
-    ids = Swarm.multi_call :g_cluster, :get_id
-    Enum.each ids, fn id ->
-        Logger.info "[MASTER] Connected cluster: #{id}"
-      end
+    ids = Swarm.multi_call :g_cluster, :get_shard_ids
+    taken = Enum.reduce(ids, [], fn({cluster, shards}, acc) ->
+              Logger.info "[MASTER] Connected cluster #{cluster} with shards: #{inspect shards, pretty: true}"
+              acc ++ shards
+            end)
+    Logger.info "[MASTER] Used shards: #{inspect taken, pretty: true}"
+    unused_shards = state[:unused_shards] -- taken
     Process.send_after self(), :start_sharding, 1500
-    {:noreply, state}
+    {:noreply, %{state | used_shards: taken, unused_shards: unused_shards}}
   end
 
   # Get clusters sorted by shard count. Clusters are sorted ascending, ie the

@@ -31,6 +31,10 @@ defmodule G.Cluster do
     {:reply, state[:shard_count], state}
   end
 
+  def handle_call(:get_shard_ids, _from, state) do
+    {:reply, {state[:id], Map.values(state[:refs])}, state}
+  end
+
   # This is done synchronously so that the caller (SIGTERM handler) can be sure
   # that we've actually finished stopping shards before shutting down.
   def handle_call(:stop_all_shards, _from, state) do
