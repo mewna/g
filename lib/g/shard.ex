@@ -11,6 +11,10 @@ defmodule G.Shard do
   @session_key_base "g:shard:session"
   @seq_key_base "g:shard:seqnum"
 
+  # Time before a shard is considered zombied, in milliseconds.
+  # 5 minutes is a pretty reasonable timeout imo.
+  @zombie_threshold 300_000
+
   ##################
   ## Opcode stuff ##
   ##################
@@ -67,6 +71,7 @@ defmodule G.Shard do
               |> Map.put(:internal_id, internal_id)
               |> Map.put(:seq, 0)
               |> Map.put(:trace, [])
+              |> Map.put(:last_event, 0)
       # TODO: This should actually use WebSockex.start_link/4
       WebSockex.start @gateway_url, __MODULE__, state, [async: true]
     else
@@ -101,6 +106,7 @@ defmodule G.Shard do
     # When we get a gateway op, it'll be of the same form always, which makes our lives easier
     #state |> info("Got gateway payload: #{inspect payload, pretty: true}")
     state = state |> Map.put(:seq, payload[:s] || state[:seq])
+                  |> Map.put(:last_event, :os.system_time(:millisecond))
     {res, reply, new_state} = handle_op payload[:op], payload, state
     case res do
       :reply -> {:reply, reply, new_state}
@@ -113,6 +119,11 @@ defmodule G.Shard do
   def handle_frame(msg, state) do
     state |> info("Got non-ETF gateway payload: #{inspect msg, pretty: true}")
     {:ok, state}
+  end
+
+  def handle_cast(:close, state) do
+    state |> warn("Disconnecting due to request")
+    {:close, state}
   end
 
   def handle_disconnect(disconnect_map, state) do
@@ -141,6 +152,8 @@ defmodule G.Shard do
     send self(), {:heartbeat, d[:heartbeat_interval]}
     trace = d[:_trace]
     state |> info("Trace: #{inspect trace, pretty: true}")
+    # Since we've successfully connected, we can start zombie shard detection
+    send self(), :check_zombie
     # Finally, fire off an IDENTIFY or a RESUME based on the session state
     {:ok, session_id} = Redis.q ["HGET", @session_key_base, "#{state[:shard_id}"]]
     if session_id == nil or session_id == :undefined do
@@ -199,7 +212,6 @@ defmodule G.Shard do
         state |> info("We are: '#{user[:username]}##{user[:discriminator]}'")
         # Alert the cluster that we finished booting, backing off a bit to allow
         # for proper IDENTIFY ratelimit handling
-        # TODO: Figure out how to test RESUME vs IDENTIFY
         Process.send_after state[:cluster], {:shard_booted, state[:shard_id]}, 5500
       :RESUMED ->
         state |> info("RESUMED! Welcome back to Discord!")
@@ -239,8 +251,20 @@ defmodule G.Shard do
     state |> info("HEARTBEAT")
     payload = binary_payload @op_heartbeat, state[:seq]
     Process.send_after self(), message, interval
-    #{:ok, state}
     {:reply, {:binary, payload}, state}
+  end
+
+  def handle_info(:check_zombie, state) do
+    last = state[:last_event]
+    now = :os.system_time :millisecond
+    if now - last >= @zombie_threshold do
+      # Zombie! Terminate and let the shard get rescheduled
+      {:close, state}
+    else
+      # Check once a second is probably reasonable
+      Process.send_after self(), :check_zombie, 1000
+      {:ok, state}
+    end
   end
 
   #####################

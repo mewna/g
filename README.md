@@ -19,8 +19,8 @@ balance your node cluster over time. Later, it is planned that the master can pr
 cluster. 
 
 While this is a fully-functional Discord bot gateway lib. in its current state, a few vital pieces of functionality are missing.
-Specifically, I still need to implement a proper event queueing system so backend workers can recv events, as well as 
-session-stealing to minimize downtime. 
+Specifically, I still need to implement a proper event queueing system so backend workers can recv events, as well as a way for
+users to sent gateway messages. 
 
 ### Session stealing?
 
@@ -32,6 +32,10 @@ flow, you can "steal" the session from a previous shard with the same id / shard
 
 G uses [Raindrop](https://github.com/queer/raindrop) for fetching snowflake IDs for many things. Eventually this may be a proper
 "pluggable" thing. 
+
+## What about voice support?
+
+Voice support is a non-goal for G. Feel free to PR your own implementation, but I won't be making one. 
 
 ## Usage
 
@@ -55,6 +59,7 @@ NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjude
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
 - Zombie shard detection
+- Rebalance shards
 
 ## Done
 
