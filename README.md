@@ -143,7 +143,6 @@ G sends events to [Q](https://github.com/mewna/q)-backed queues in redis. Queue 
 
 ## TODO
 
-- Some sort of standard for external cache workers
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
 - Protect against the case of a 0-shard node
