@@ -1,7 +1,7 @@
 defmodule G.Shard do
   use WebSockex
   require Logger
-  alias Lace.Redis
+  alias G.Redis
 
   @api_base "https://discordapp.com/api/v6"
 
@@ -144,9 +144,9 @@ defmodule G.Shard do
     :ok
   end
 
-  ######################
-  ## GATEWAY HANDLERS ##
-  ######################
+  #############################
+  ## GATEWAY OPCODE HANDLERS ##
+  #############################
 
   defp handle_op(@op_hello, payload, state) do
     d = payload[:d]
@@ -178,57 +178,12 @@ defmodule G.Shard do
   end
 
   defp handle_op(@op_dispatch, payload, state) do
-    d = payload[:d]
-    t = payload[:t]
-    case t do
-      :READY ->
-        state |> info("READY! Welcome to Discord!")
-        # %{
-        #   _trace: ["gateway-prd-main-numbers", "discord-sessions-prd-numbers-numbers"],
-        #   guilds: [%{id: 2837641927843141, unavailable: true}],
-        #   presences: [],
-        #   private_channels: [],
-        #   relationships: [],
-        #   session_id: "memes",
-        #   shard: [0, 1234567890],
-        #   user: %{
-        #     avatar: "alsiekduhyfnjs",
-        #     bot: true,
-        #     discriminator: "123456",
-        #     email: nil,
-        #     id: 2186743214213074,
-        #     mfa_enabled: true,
-        #     username: "memebot 9000",
-        #     verified: true
-        #   },
-        #   user_settings: %{},
-        #   v: 6
-        # }
-
-        # Update session and seqnum
-        Redis.q ["HSET", @session_key_base, "#{state[:shard_id]}", d[:session_id]]
-        # Extract info about ourself
-        user = d[:user]
-        guilds = d[:guilds]
-        v = d[:v]
-        state |> info("Logged in to gateway v#{v}, #{length guilds} guilds")
-        state |> info("We are: '#{user[:username]}##{user[:discriminator]}'")
-        # Alert the cluster that we finished booting, backing off a bit to allow
-        # for proper IDENTIFY ratelimit handling
-        send state[:cluster], {:shard_booted, state[:shard_id]}
-      :RESUMED ->
-        state |> info("RESUMED! Welcome back to Discord!")
-        send state[:cluster], {:shard_resumed, state[:shard_id]}
-      _ ->
-        suffix = t |> Atom.to_string |> String.downcase
-        GenServer.cast :q_backend, {:queue, payload, suffix}
-        state |> warn("Unknown DISPATCH type: #{inspect t, pretty: true}")
-    end
-    # Finally, whenever we get a DISPATCH event, we need to update the seqnum
-    # based on what the gateway tells us
+    # Whenever we get a DISPATCH event, we need to update the seqnum based on
+    # what the gateway tells us
     # TODO: Check against old seqnum to make sure the gateway isn't telling us to go time-traveling
     Redis.q ["HSET", @seq_key_base, "#{state[:shard_id]}", payload[:s]]
-    {:noreply, nil, state}
+    t = payload[:t]
+    handle_event t, payload, payload[:d], state
   end
 
   defp handle_op(@op_heartbeat_ack, _payload, state) do
@@ -245,6 +200,258 @@ defmodule G.Shard do
       Redis.q ["HDEL", @seq_key_base, "#{state[:shard_id]}"]
     end
     {:terminate, nil, state}
+  end
+
+  ############################
+  ## GATEWAY EVENT HANDLERS ##
+  ############################
+
+  def handle_event(:READY, _payload, d, state) do
+    state |> info("READY! Welcome to Discord!")
+    # Update session and seqnum
+    Redis.q ["HSET", @session_key_base, "#{state[:shard_id]}", d[:session_id]]
+    # Extract info about ourself
+    user = d[:user]
+    guilds = d[:guilds]
+    v = d[:v]
+    state |> info("Logged in to gateway v#{v}, #{length guilds} guilds")
+    state |> info("We are: '#{user[:username]}##{user[:discriminator]}'")
+    # Alert the cluster that we finished booting, backing off a bit to allow
+    # for proper IDENTIFY ratelimit handling
+    send state[:cluster], {:shard_booted, state[:shard_id]}
+    {:noreply, nil, state}
+  end
+
+  def handle_event(:RESUMED, _payload, _d, state) do
+    state |> info("RESUMED! Welcome back to Discord!")
+    send state[:cluster], {:shard_resumed, state[:shard_id]}
+    {:noreply, nil, state}
+  end
+
+  ## Guild payloads ##
+  def handle_event(:GUILD_CREATE, _payload, d, state) do
+    {_presences, d} = Map.pop d, :presences
+    {_voice_states, d} = Map.pop d, :voice_states
+    {members, d} = Map.pop d, :members
+    guild = :erlang.term_to_binary d
+    # Update guild
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], guild]
+    # Update member chunks
+    members |> Enum.chunk_every(1000)
+            |> Enum.each(fn(chunk) ->
+                Redis.t(fn(w) ->
+                    Enum.each(chunk, fn(member) ->
+                        {user, new_member} = Map.pop member, :user
+                        m = new_member
+                            |> Map.put(:user, user[:id])
+                            |> :erlang.term_to_binary
+                        Redis.q w, ["HSET", "g:cache:#{state[:shard_id]}:guild:#{d[:id]}:members", user[:id], m]
+                        Redis.q w, ["HSET", "g:cache:users", user[:id], user]
+                      end)
+                  end)
+              end)
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_UPDATE, _payload, d, state) do
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", d[:id]]
+    old_guild = :erlang.binary_to_term res
+    new_guild = Map.merge old_guild, d
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_DELETE, _payload, d, state) do
+    if Map.has_key?(d, :unavailable) do
+      unless d[:unavailable] do
+        # Guild deleted and not unavailable, remove from cache
+        Redis.q ["HDEL", "g:cache:#{state[:shard_id]}:guild", d[:id]]
+      end
+    end
+    {:noreply, nil, state}
+  end
+
+  ## Member payloads
+  def handle_event(:GUILD_MEMBER_ADD, _payload, d, state) do
+    # d is member with a guild_id field
+    {user, member} = Map.pop d, :user
+    m = member
+        |> Map.put(:user, user[:id])
+        |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild:#{d[:guild_id]}:members", user[:id], m]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_MEMBER_UPDATE, _payload, d, state) do
+    # d is
+    # %{
+    #   guild_id: meme,
+    #   roles: [meme, meme, meme],
+    #   user: {meme: meme},
+    #   nick: "meme"
+    # }
+    {user, member} = Map.pop d, :user
+    member = member |> Map.put(:user, user[:id])
+    {:ok, old_member} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild:#{d[:guild_id]}:members", user[:id]]
+    new_member = old_member |> Map.put(:roles, member[:roles])
+                            |> Map.put(:nick, member[:nick])
+    m = new_member |> :erlang.term_to_binary()
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild:#{d[:guild_id]}:members", user[:id], m]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_MEMBER_REMOVE, _payload, d, state) do
+    # d is user and guild_id field
+    {user, _} = Map.pop d, :user
+    Redis.q ["HDEL", "g:cache:#{state[:shard_id]}:guild:#{d[:guild_id]}:members", user[:id]]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_MEMBERS_CHUNK, _payload, d, state) do
+    Redis.t(fn(w) ->
+      Enum.each(d[:members], fn(member) ->
+          {user, member} = Map.pop member, :user
+          m = member
+              |> Map.put(:user, user[:id])
+              |> :erlang.term_to_binary
+          Redis.q w, ["HSET", "g:cache:#{state[:shard_id]}:guild:#{d[:id]}:members", user[:id], m]
+        end)
+      end)
+    {:noreply, nil, state}
+  end
+
+  ## Channel payloads ##
+  def handle_event(:CHANNEL_CREATE, _payload, d, state) do
+    # d is a channel object
+    channel = d
+    guild_id = d[:guild_id]
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    new_channels = old_guild[:channels] ++ [channel]
+    # TODO: Is this the right sort order?
+    new_channels = new_channels |> Enum.sort(fn(c1, c2) -> c1.position < c2.position end)
+    new_guild = %{old_guild | channels: new_channels}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+  def handle_event(:CHANNEL_UPDATE, _payload, d, state) do
+    # d is a channel object
+    channel = d
+    guild_id = d[:guild_id]
+
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    old_channels = old_guild[:channel]
+    idx = old_channels |> Enum.find_index(fn(x) -> x[:id] == channel[:id] end)
+    new_channels = old_channels |> List.insert_at(idx, channel)
+                          # TODO: Is this the right sort order?
+                          |> Enum.sort(fn(r1, r2) -> r1.position < r2.position end)
+    new_guild = %{old_guild | channels: new_channels}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+  def handle_event(:CHANNEL_DELETE, _payload, d, state) do
+    # d is a channel object
+    channel_id = d[:id]
+    guild_id = d[:guild_id]
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    new_channels = old_guild[:channels] |> Enum.filter(fn(e) -> e[:id] != channel_id end)
+    new_guild = %{old_guild | channels: new_channels}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+
+    {:noreply, nil, state}
+  end
+
+  ## Role payloads ##
+  def handle_event(:GUILD_ROLE_CREATE, _payload, d, state) do
+    # d is a role object and a guild_id field
+    role = d[:role]
+    guild_id = d[:guild_id]
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    new_roles = old_guild[:roles] ++ [role]
+    # TODO: Is this the right sort order?
+    new_roles = new_roles |> Enum.sort(fn(r1, r2) -> r1.position < r2.position end)
+    new_guild = %{old_guild | roles: new_roles}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_ROLE_UPDATE, _payload, d, state) do
+    # d is a role object and a guild_id field
+    role = d[:role]
+    guild_id = d[:guild_id]
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    old_roles = old_guild[:roles]
+    idx = old_roles |> Enum.find_index(fn(x) -> x[:id] == role[:id] end)
+    new_roles = old_roles |> List.insert_at(idx, role)
+                          # TODO: Is this the right sort order?
+                          |> Enum.sort(fn(r1, r2) -> r1.position < r2.position end)
+    new_guild = %{old_guild | roles: new_roles}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+  def handle_event(:GUILD_ROLE_DELETE, _payload, d, state) do
+    # d is a role_id field and a guild_id field
+    role_id = d[:role_id]
+    guild_id = d[:guild_id]
+    {:ok, res} = Redis.q ["HGET", "g:cache:#{state[:shard_id]}:guild", guild_id]
+    old_guild = :erlang.binary_to_term res
+    new_roles = old_guild[:roles] |> Enum.filter(fn(e) -> e[:id] != role_id end)
+    new_guild = %{old_guild | roles: new_roles}
+                |> :erlang.term_to_binary
+    Redis.q ["HSET", "g:cache:#{state[:shard_id]}:guild", d[:id], new_guild]
+    {:noreply, nil, state}
+  end
+
+  ## User payloads ##
+  def handle_event(:USER_UPDATE, _payload, _d, state) do
+    # TODO: How much do I even care about this?
+    {:noreply, nil, state}
+  end
+  def handle_event(:PRESENCE_UPDATE, _payload, d, state) do
+    # This is the worst one ;-;
+    # d is
+    # %{
+    #   user: %{},
+    #   roles: [1, 2, 3, 4],
+    #   game: %{},
+    #   guild_id: 1234,
+    #   status: "whatever"
+    # }
+    # Because Discord:tm:, the user object may be partial. At the very least,
+    # it will have an `id` field. Any fields contained in the user object are
+    # fields that the user changed, and need to be updated on the cached user.
+    #
+    # TODO: Using the roles field to enforce roles on the member object?
+    user = d[:user]
+    # This could be updating any of: username, discriminator, avatar
+    if Map.has_key?(user, :username) or Map.has_key?(user, :discriminator) or Map.has_key?(user, :avatar) do
+      # User has an updatable field, so update cache
+      {:ok, old_user} = Redis.q ["HGET", "g:cache:users", user[:id]]
+
+      new_user = old_user |> maybe_update_user(user, :username)
+                          |> maybe_update_user(user, :discriminator)
+                          |> maybe_update_user(user, :avatar)
+      # Update cache
+      Redis.q ["HSET", "g:cache:users", user[:id], new_user]
+    end
+    {:noreply, nil, state}
+  end
+  defp maybe_update_user(user, payload, key) do
+    if Map.has_key?(payload, key) do
+      user |> Map.put(key, payload[key])
+    else
+      user
+    end
+  end
+
+  def handle_event(event, payload, _d, state) do
+    suffix = event |> Atom.to_string |> String.downcase
+    GenServer.cast :q_backend, {:queue, payload, suffix}
+    state |> warn("Unknown DISPATCH type: #{event}")
+    {:noreply, nil, state}
   end
 
   #######################

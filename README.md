@@ -1,6 +1,6 @@
 # G
 
-Distributed, cacheless Discord bot sharding.
+Distributed, cacheless* Discord bot sharding.
 
 ## Wait what?
 
@@ -27,6 +27,74 @@ users to sent gateway messages.
 Session-stealing is a useful trick to help minimize bot downtime. Rather than have to go through the full connect-and-identify
 flow, you can "steal" the session from a previous shard with the same id / shard total, and resume the session on a new shard 
 (potentially even on a different node!) so that you can continue your shard's session without any downtime. 
+
+## Cacheless but with an asterisk?
+
+**G does not store its Discord entity cache in-memory**. Caching is done externally with Redis. This is currently *mandatory* but
+will likely become optional someday. Ideally we could run entirely without cache - and the recent 
+[lazy guild changes](https://github.com/discordapp/discord-api-docs/issues/582) make this possible for a lot of use cases, but my 
+applications need some amount of cache that can't be faked without a lot of 429s.
+
+Redis cache keys are stored as hashes:
+```
+$ indicates a variable
+
+guild   - g:cache:$shard:guild $id data
+channel - stored on the guild object
+role    - stored on the guild object
+member  - g:cache:$shard:guild:$id:member $id data
+user    - g:cache:user $id data
+```
+Note that the user data is NOT stored in a per-shard cache. This is to avoid user duplication (which can easily be millions of users);
+guilds / channels / roles / members are *not* global data (as a guild the bot is in is guaranteed to be on exactly 1 shard), so those
+are stored as per-shard caches. *If a shard has to do a full `IDENTIFY`, existing data cached for that shard is __deleted__*. 
+
+Example data:
+```Javascript
+// Guild example
+// Stored at g:cache:1:guild 487256022529037787
+{
+    "id": 487256022529037787,
+    "name": "my cool guild",
+    // ...
+    "channels": [
+        {
+            "id": 487256022529037787
+            "name": "general",
+            // ...
+        }
+    ],
+    "roles": [
+        {
+            "id": 487256022529037787,
+            "name": "everyone",
+            // ...
+        }
+    ]
+}
+// Member example
+// Stored at g:cache:1:guild:487256022529037787:members 477256022529037786
+{
+    "id": 477256022529037786,
+    "nick": null,
+    // ...
+}
+
+// User example
+// Stored at g:cache:users 477256022529037786
+{
+    "id": 477256022529037786,
+    "username": "my cool user",
+    "discriminator": "1234"
+}
+```
+
+### ytho
+
+A dedicated external process for caching is problematic because it gives the potential for cache quickly becoming desynchronized
+with how it actually should be. However, passing off state between shard instances is a huge pain - a single shard's cache can
+easily be 200MB+, and as you have more shards this memory usage increases very quickly. Instead, we can store data externally in 
+Redis and solve many problems. 
 
 ## Shard rebalancing
 
@@ -79,6 +147,7 @@ G sends events to [Q](https://github.com/mewna/q)-backed queues in redis. Queue 
 - Option for member chunking
 - Detect a `^C` of `mix run --no-halt`?
 - Protect against the case of a 0-shard node
+- Make external caching optional
 
 ## Done
 

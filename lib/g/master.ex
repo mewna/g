@@ -68,8 +68,6 @@ defmodule G.Master do
   # Get clusters sorted by shard count. Clusters are sorted ascending, ie the
   # head of the list is smallest and the tail is the largest
   defp get_clusters_by_shard_count do
-    # [{name, pid}]
-    clusters = Swarm.registered()
     # This:
     # - Gets all pids in the swarm that are shard clusters
     # - Queries them for shard count
@@ -149,9 +147,6 @@ defmodule G.Master do
     end
 
     {:noreply, state}
-  end
-  defp within_threshold(count, expected) when is_integer(count) and is_integer(expected) do
-    count >= expected - @balance_threshold and count <= expected + @balance_threshold
   end
   defp above_threshold(count, expected) when is_integer(count) and is_integer(expected) do
     count >= expected + @balance_threshold
