@@ -49,17 +49,9 @@ defmodule G.Master do
     {:noreply, %{state | used_shards: taken, unused_shards: unused_shards}}
   end
 
-  # Get clusters sorted by shard count. Clusters are sorted ascending, ie the
-  # head of the list is smallest and the tail is the largest
-  defp get_clusters_by_shard_count do
+  defp get_clusters do
     # [{name, pid}]
-    clusters = Swarm.registered()
-    # This:
-    # - Gets all pids in the swarm that are shard clusters
-    # - Queries them for shard count
-    # - Sorts them by shard count, ascending
-    # - Picks the head of the list (ie. the cluster with the fewest shards on it)
-    clusters
+    Swarm.registered()
     |> Enum.filter(fn {cluster_module_name, _pid} ->
         cl_name = case cluster_module_name do
                     {_module, atom} ->
@@ -71,6 +63,19 @@ defmodule G.Master do
                   end
         String.starts_with? cl_name, "g_cluster"
       end)
+  end
+
+  # Get clusters sorted by shard count. Clusters are sorted ascending, ie the
+  # head of the list is smallest and the tail is the largest
+  defp get_clusters_by_shard_count do
+    # [{name, pid}]
+    clusters = Swarm.registered()
+    # This:
+    # - Gets all pids in the swarm that are shard clusters
+    # - Queries them for shard count
+    # - Sorts them by shard count, ascending
+    # - Picks the head of the list (ie. the cluster with the fewest shards on it)
+    get_clusters()
     |> Enum.map(fn {name, cluster} ->
         shard_count = GenServer.call({:via, :swarm, name}, :get_shard_count)
         {shard_count, cluster, name}
@@ -112,9 +117,6 @@ defmodule G.Master do
   def handle_info(:check_rebalance, state) do
     # {shard_count, target, name}
     sorted_clusters = get_clusters_by_shard_count()
-                      |> Enum.sort(fn {shard_count_1, _, _}, {shard_count_2, _, _} ->
-                        shard_count_1 < shard_count_2
-                      end)
     shard_count = length(state[:used_shards]) + length(state[:unused_shards])
     expected_count = round(shard_count / length(sorted_clusters))
     Logger.debug "[MASTER] #{length(sorted_clusters)} clusters, #{shard_count} shards, #{expected_count} expected"
@@ -137,6 +139,10 @@ defmodule G.Master do
           GenServer.cast {:via, :swarm, name}, {:stop_shards, reduction}
         end
       end)
+      # By asking a cluster to stop shards, it'll queue up new shards to be
+      # connected, which will trigger a :start_sharding message which will
+      # eventually restart this loop
+      # TODO: Sometimes, shards won't actually boot. We can solve this by adding a watcher for our watcher
     else
       # Recheck later
       Process.send_after self(), :check_rebalance, 1000
@@ -158,7 +164,7 @@ defmodule G.Master do
     Logger.info "[MASTER] Booted shard #{shard_id}"
     unused_shards = state[:unused_shards] |> List.delete(shard_id)
     used_shards = state[:used_shards] ++ [shard_id]
-    Process.send_after self(), :start_sharding, 500
+    Process.send_after self(), :start_sharding, 5500
     {:noreply, %{state | unused_shards: unused_shards, used_shards: used_shards}}
   end
   def handle_cast({:shard_resumed, shard_id}, state) do
@@ -178,6 +184,22 @@ defmodule G.Master do
 
   def handle_call(:get_master_id, _from, state) do
     {:reply, state[:id], state}
+  end
+
+  def handle_call(:get_status, _from, state) do
+    res = get_clusters()
+          |> Enum.map(fn({name, _pid} = _cluster) ->
+              # Once we have a target cluster, we can ask it to spawn a shard
+              target_id = GenServer.call {:via, :swarm, name}, :get_id
+              shard_count = GenServer.call {:via, :swarm, name}, :get_shard_count
+              {_target_id, shard_ids} = GenServer.call {:via, :swarm, name}, :get_shard_ids
+              %{
+                id: target_id,
+                shard_count: shard_count,
+                shard_ids: shard_ids,
+              }
+            end)
+    {:reply, res, state}
   end
 
   #####################

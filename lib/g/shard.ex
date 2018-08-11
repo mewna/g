@@ -215,12 +215,13 @@ defmodule G.Shard do
         state |> info("We are: '#{user[:username]}##{user[:discriminator]}'")
         # Alert the cluster that we finished booting, backing off a bit to allow
         # for proper IDENTIFY ratelimit handling
-        Process.send_after state[:cluster], {:shard_booted, state[:shard_id]}, 5500
+        send state[:cluster], {:shard_booted, state[:shard_id]}
       :RESUMED ->
         state |> info("RESUMED! Welcome back to Discord!")
         send state[:cluster], {:shard_resumed, state[:shard_id]}
       _ ->
-        GenServer.cast :q_backend, {:queue, payload}
+        suffix = t |> Atom.to_string |> String.downcase
+        GenServer.cast :q_backend, {:queue, payload, suffix}
         state |> warn("Unknown DISPATCH type: #{inspect t, pretty: true}")
     end
     # Finally, whenever we get a DISPATCH event, we need to update the seqnum

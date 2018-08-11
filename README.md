@@ -68,6 +68,11 @@ GROUP_NAME="my-awesome-group"
 NODE_COOKIE="arjkyhgfvbakuwejsgdfbvkuwjsyhgfbckrujeywhgbakerwjfgaekwjufghbckjudeshcybgrvejwhuysdcbva"
 ```
 
+### Event queueing
+
+G sends events to [Q](https://github.com/mewna/q)-backed queues in redis. Queue names are structured as `discord:event:event_name`, ex
+`discord:event:guild_create`, `discord:event:message_create`, ...
+
 ## TODO
 
 - Some sort of standard for external cache workers

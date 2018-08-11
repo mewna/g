@@ -9,19 +9,25 @@ defmodule G.Application do
   require Logger
   def start(_type, _args) do
     G.Signal.swap_handlers()
-    # List all child processes to be supervised
+    server_port = if System.get_env("PORT") do
+                    System.get_env("PORT") |> String.to_integer
+                  else
+                    80
+                  end
     children = [
       # Clustering
       {Lace.Redis, %{redis_ip: System.get_env("REDIS_HOST"), redis_port: 6379, pool_size: 10, redis_pass: System.get_env("REDIS_PASS")}},
       {Lace, %{name: System.get_env("NODE_NAME"), group: System.get_env("GROUP_NAME"), cookie: System.get_env("NODE_COOKIE")}},
       # Dynamic processes
       {G.Supervisor, []},
+      # API
+      {G.Server, [%{}, [port: server_port]]},
       # Message queueing
       %{
         id: :q_backend,
         start: {Q, :start_link, [%{
           name: :q_backend,
-          queue: "discord:queue:backend",
+          queue: "discord:event",
           host: System.get_env("REDIS_HOST"),
           port: 6379,
           pass: System.get_env("REDIS_PASS"),
@@ -41,9 +47,7 @@ defmodule G.Application do
         Logger.info "[APP] Starting cluster worker..."
         id = HTTPoison.get!(System.get_env("RAINDROP_URL")).body
         Logger.info "[APP] Worker: #{id}"
-        #{:ok, pid} = Swarm.register_name :"g_cluster_#{id}", G.Supervisor, :register, [G.Cluster, ]
         {:ok, pid} = GenServer.start_link G.Cluster, %{token: System.get_env("BOT_TOKEN"), id: id}, name: {:via, :swarm, {G.Cluster, :"g_cluster_#{id}"}}
-        #Swarm.join :g, pid
         Swarm.join :g_cluster, pid
       end
 

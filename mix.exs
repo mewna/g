@@ -29,7 +29,8 @@ defmodule G.MixProject do
       {:swarm, "~> 3.0"},
       {:httpoison, "~> 1.0"},
       {:dialyxir, "~> 1.0.0-rc.2", only: [:dev], runtime: false},
-      {:q, github: "mewna/q"}
+      {:q, github: "mewna/q"},
+      {:ace, "~> 0.16.7"},
     ]
   end
 end
