@@ -1,3 +1,7 @@
+# THIS PROJECT IS NOT MAINTAINED
+
+There wree some nasty bugs in it that made ex. shard revival break. It wasn't worth the effort to hunt it down, so it's officially abandoned. 
+
 # G
 
 Distributed, cacheless* Discord bot sharding.
